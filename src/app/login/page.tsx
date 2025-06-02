@@ -11,9 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { LogIn, Lock, Mail, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { signInWithEmailAndPassword, type UserCredential } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 
 const loginSchema = z.object({
   email: z.string().email({ message: "Invalid email address." }),
@@ -22,22 +23,28 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
-// Mock Firebase Auth sign-in
-const mockSignIn = async (email: string, password: string) => {
-  return new Promise<{ uid: string; email: string } | null>((resolve, reject) => {
-    setTimeout(() => {
-      // Simulate a real user check. In a real app, this would be a Firebase call.
-      if (password === "password123") { // Example valid password
-        const uid = `mock_uid_${email.split('@')[0]}`;
-        localStorage.setItem("mock_current_user_id", uid);
-        localStorage.setItem("mock_current_user_email", email);
-        resolve({ uid, email });
-      } else {
-        reject(new Error("Invalid email or password. Try 'password123' for the password."));
-      }
-    }, 1500);
-  });
+const loginUser = async (email: string, password: string) => {
+  try {
+    const userCredential: UserCredential = await signInWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+    // Firebase handles session, no need to manually store in localStorage here
+    return { uid: user.uid, email: user.email };
+  } catch (error: any) {
+    // Firebase errors often have a 'code' property like 'auth/wrong-password' or 'auth/user-not-found'
+    // You can customize messages based on error.code
+    let errorMessage = "Login failed. Please check your credentials.";
+    if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password') {
+      errorMessage = "Invalid email or password.";
+    } else if (error.code) {
+      errorMessage = error.code.replace('auth/', '').replace(/-/g, ' ') + '.';
+      errorMessage = errorMessage.charAt(0).toUpperCase() + errorMessage.slice(1);
+    } else {
+      errorMessage = error.message || "An unexpected error occurred during login.";
+    }
+    throw new Error(errorMessage);
+  }
 };
+
 
 export default function LoginPage() {
   const router = useRouter();
@@ -55,12 +62,14 @@ export default function LoginPage() {
   const onSubmit = async (data: LoginFormValues) => {
     setIsLoading(true);
     try {
-      await mockSignIn(data.email, data.password);
+      await loginUser(data.email, data.password);
       toast({
         title: "Login Successful",
         description: "Redirecting...",
       });
-      router.push("/role-check");
+      // Firebase's onAuthStateChanged listener should handle user state globally
+      // We still redirect to role-check which will verify role based on the logged-in user
+      router.push("/role-check"); 
     } catch (error: any) {
       toast({
         variant: "destructive",

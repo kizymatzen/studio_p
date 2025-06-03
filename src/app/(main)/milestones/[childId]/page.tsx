@@ -3,8 +3,8 @@
 
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
-import { doc, getDoc, collection, query, where, orderBy, onSnapshot, setDoc, serverTimestamp, Timestamp, DocumentData } from "firebase/firestore";
-import { differenceInMonths } from "date-fns";
+import { doc, getDoc, collection, query, where, orderBy, onSnapshot, setDoc, serverTimestamp, Timestamp, DocumentData, getDocs } from "firebase/firestore";
+import { differenceInMonths, format } from "date-fns";
 
 import { auth, db } from "@/lib/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
@@ -37,23 +37,23 @@ interface MilestoneTemplate {
 type MilestoneStatus = "Not Started" | "In Progress" | "Achieved";
 
 interface MilestoneProgress {
-  id: string; // Corresponds to MilestoneTemplate.id
-  milestoneId: string;
+  id: string; // Document ID of the progress entry in the subcollection
+  milestoneId: string; // Corresponds to MilestoneTemplate.id
   status: MilestoneStatus;
   dateAchieved?: Timestamp | null;
   notes?: string;
-  // parentId could be added for direct querying/rules but often derived from parent document path
 }
 
 interface CombinedMilestone extends MilestoneTemplate {
   currentStatus: MilestoneStatus;
-  progressDocId?: string; // ID of the document in milestoneProgress subcollection
+  progressDocId?: string; // ID of the document in milestoneProgress subcollection (which is template.id)
   dateAchieved?: Timestamp | null;
 }
 
 function getAgeInMonths(birthDateTimestamp: Timestamp): number {
   if (!birthDateTimestamp || typeof birthDateTimestamp.toDate !== 'function') {
-    return 0; // Or handle as an error
+    console.error("Invalid birthDateTimestamp provided to getAgeInMonths");
+    return 0;
   }
   const birthDate = birthDateTimestamp.toDate();
   const now = new Date();
@@ -61,20 +61,6 @@ function getAgeInMonths(birthDateTimestamp: Timestamp): number {
 }
 
 const statusOptions: MilestoneStatus[] = ["Not Started", "In Progress", "Achieved"];
-
-// Placeholder for milestone templates - In a real app, fetch this from Firestore
-// Ensure these IDs match what you might have in your `milestoneTemplates` collection in Firestore.
-const MOCK_MILESTONE_TEMPLATES: MilestoneTemplate[] = [
-  { id: "smiles_socially", ageRange: "0-2 months", category: "Social/Emotional", description: "Smiles when you talk to or smile at her", minAgeMonths: 0, maxAgeMonths: 2 },
-  { id: "holds_head_up", ageRange: "0-2 months", category: "Motor (Physical)", description: "Holds head up when on tummy", minAgeMonths: 0, maxAgeMonths: 2 },
-  { id: "coos_gurgles", ageRange: "0-2 months", category: "Language/Communication", description: "Coos, makes gurgling sounds", minAgeMonths: 0, maxAgeMonths: 2 },
-  { id: "tracks_eyes", ageRange: "0-2 months", category: "Cognitive", description: "Follows things with eyes", minAgeMonths: 0, maxAgeMonths: 2 },
-  { id: "plays_pat_a_cake", ageRange: "9-12 months", category: "Social/Emotional", description: "Plays games with you, like pat-a-cake", minAgeMonths: 9, maxAgeMonths: 12 },
-  { id: "looks_for_hidden", ageRange: "9-12 months", category: "Cognitive", description: "Looks for things he sees you hide", minAgeMonths: 9, maxAgeMonths: 12 },
-  { id: "first_steps", ageRange: "12-18 months", category: "Motor (Physical)", description: "Takes first steps independently", minAgeMonths: 12, maxAgeMonths: 18 },
-  { id: "says_mama_dada", ageRange: "9-12 months", category: "Language/Communication", description: "Says 'mama' or 'dada'", minAgeMonths: 9, maxAgeMonths: 12 },
-  { id: "stacks_two_blocks", ageRange: "12-18 months", category: "Cognitive", description: "Can stack two blocks", minAgeMonths: 12, maxAgeMonths: 18 },
-];
 
 
 export default function MilestonesPage() {
@@ -124,16 +110,28 @@ export default function MilestonesPage() {
         }
         const fetchedChildData = { id: childDocSnap.id, ...childDocSnap.data() } as ChildData;
         setChildData(fetchedChildData);
+        
+        if (!fetchedChildData.birthdate || typeof fetchedChildData.birthdate.toDate !== 'function') {
+          setError("Child birthdate is missing or invalid, cannot calculate age for milestones.");
+          setIsLoading(false);
+          return;
+        }
         const currentAgeInMonths = getAgeInMonths(fetchedChildData.birthdate);
         setAgeInMonths(currentAgeInMonths);
 
-        // 2. Fetch Milestone Templates (Using mock for now, replace with Firestore query)
-        // For a real app:
-        // const templatesQuery = query(collection(db, "milestoneTemplates"), where("minAgeMonths", "<=", currentAgeInMonths));
-        // const templatesSnap = await getDocs(templatesQuery);
-        // const templates: MilestoneTemplate[] = templatesSnap.docs.map(d => ({ id: d.id, ...d.data() } as MilestoneTemplate));
-        const templates: MilestoneTemplate[] = MOCK_MILESTONE_TEMPLATES.filter(t => t.minAgeMonths <= currentAgeInMonths);
+        // 2. Fetch Milestone Templates from Firestore
+        const templatesColRef = collection(db, "milestoneTemplates");
+        const templatesQuery = query(
+          templatesColRef,
+          where("minAgeMonths", "<=", currentAgeInMonths),
+          // where("maxAgeMonths", ">=", currentAgeInMonths) // Uncomment if you only want currently relevant, not all up to age
+        );
+        const templatesSnapshot = await getDocs(templatesQuery);
+        const templates: MilestoneTemplate[] = templatesSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as MilestoneTemplate));
 
+        if (templates.length === 0) {
+            console.log("No milestone templates found for age:", currentAgeInMonths);
+        }
 
         // 3. Fetch Milestone Progress (Listen for real-time updates)
         const progressColRef = collection(db, "children", childId, "milestoneProgress");
@@ -146,10 +144,10 @@ export default function MilestonesPage() {
             return {
               ...template,
               currentStatus: progress?.status || "Not Started",
-              progressDocId: progress?.id, // This is the doc ID from milestoneProgress, which is the template.id
+              progressDocId: progress?.id, // This is the doc ID from milestoneProgress, which is template.id
               dateAchieved: progress?.dateAchieved,
             };
-          }).sort((a,b) => a.minAgeMonths - b.minAgeMonths || a.description.localeCompare(b.description)); // Sort for consistent display
+          }).sort((a,b) => a.minAgeMonths - b.minAgeMonths || a.description.localeCompare(b.description));
           
           setCombinedMilestones(combined);
 
@@ -164,14 +162,34 @@ export default function MilestonesPage() {
           setIsLoading(false);
         }, (err) => {
           console.error("Error fetching milestone progress:", err);
-          setError("Failed to load milestone progress. " + err.message);
+          if (err.code === 'failed-precondition') {
+             setError("Failed to load milestone progress. A Firestore index might be required. Please check the browser console for a link to create it.");
+             toast({
+                variant: "destructive",
+                title: "Firestore Index Required",
+                description: "Loading milestone progress failed. Check the browser console for a Firebase link to create the necessary index.",
+                duration: 15000,
+             });
+          } else {
+            setError("Failed to load milestone progress. " + err.message);
+          }
           setIsLoading(false);
         });
-        return unsubscribeProgress; // Return unsubscribe function for cleanup
+        return unsubscribeProgress;
 
       } catch (e: any) {
         console.error("Error fetching data:", e);
-        setError("Failed to load page data. " + e.message);
+         if (e.code === 'failed-precondition' && e.message.toLowerCase().includes("index")) {
+            setError("Failed to load milestone templates. A Firestore index might be required. Please check the browser console for a link to create it.");
+            toast({
+                variant: "destructive",
+                title: "Firestore Index Required for Templates",
+                description: "Loading milestone templates failed. Check the browser console for a Firebase link to create the necessary index (likely on 'milestoneTemplates' for 'minAgeMonths' and 'maxAgeMonths').",
+                duration: 15000,
+            });
+        } else {
+            setError("Failed to load page data. " + e.message);
+        }
         setIsLoading(false);
       }
     };
@@ -183,25 +201,25 @@ export default function MilestonesPage() {
       if (unsubscribe) unsubscribe();
     };
 
-  }, [authUser, childId]);
+  }, [authUser, childId, toast]);
 
   const handleStatusChange = async (milestoneId: string, newStatus: MilestoneStatus) => {
     if (!authUser || !childId) return;
 
-    const progressDocRef = doc(db, "children", childId, "milestoneProgress", milestoneId); // Use templateId as docId
+    const progressDocRef = doc(db, "children", childId, "milestoneProgress", milestoneId);
 
     try {
-      const progressData: Partial<MilestoneProgress> = {
-        milestoneId: milestoneId, // Store the template ID
+      const progressDataUpdate: Partial<Omit<MilestoneProgress, 'id'>> = { // Omit 'id' as it's the doc key
+        milestoneId: milestoneId,
         status: newStatus,
       };
       if (newStatus === "Achieved") {
-        progressData.dateAchieved = Timestamp.now();
+        progressDataUpdate.dateAchieved = Timestamp.now();
       } else {
-        progressData.dateAchieved = null; // Clear date if not achieved
+        progressDataUpdate.dateAchieved = null; 
       }
       
-      await setDoc(progressDocRef, progressData, { merge: true }); // merge true to create or update
+      await setDoc(progressDocRef, progressDataUpdate, { merge: true });
       toast({ title: "Milestone Updated", description: `Status set to ${newStatus}.` });
     } catch (error: any) {
       console.error("Error updating milestone status:", error);
@@ -224,7 +242,7 @@ export default function MilestonesPage() {
       <div className="flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center p-4 text-center">
         <AlertTriangle className="h-12 w-12 text-destructive mb-4" />
         <h2 className="text-xl font-semibold text-destructive mb-2">Error</h2>
-        <p className="text-muted-foreground mb-6">{error}</p>
+        <p className="text-muted-foreground mb-6 whitespace-pre-line">{error}</p>
         <Button onClick={() => router.push(`/child/${childId}`)}>
           <ChevronLeft className="mr-2 h-4 w-4" />
           Back to Child Profile
@@ -278,21 +296,21 @@ export default function MilestonesPage() {
                 <span>Achieved</span>
                 <span>{achieved} / {total}</span>
               </div>
-              <Progress value={total > 0 ? (achieved / total) * 100 : 0} className="h-3 bg-green-500/80" />
+              <Progress value={total > 0 ? (achieved / total) * 100 : 0} className="h-3 [&>div]:bg-green-500" />
             </div>
             <div>
               <div className="flex justify-between text-sm mb-1">
                 <span>In Progress</span>
                 <span>{inProgress} / {total}</span>
               </div>
-              <Progress value={total > 0 ? (inProgress / total) * 100 : 0} className="h-3 bg-yellow-500/80" />
+              <Progress value={total > 0 ? (inProgress / total) * 100 : 0} className="h-3 [&>div]:bg-yellow-500" />
             </div>
             <div>
               <div className="flex justify-between text-sm mb-1">
                 <span>Not Started</span>
                 <span>{notStarted} / {total}</span>
               </div>
-              <Progress value={total > 0 ? (notStarted / total) * 100 : 0} className="h-3 bg-gray-400/80" />
+              <Progress value={total > 0 ? (notStarted / total) * 100 : 0} className="h-3 [&>div]:bg-gray-400" />
             </div>
           </CardContent>
         </Card>
@@ -302,7 +320,7 @@ export default function MilestonesPage() {
         {combinedMilestones.length === 0 && !isLoading && (
             <Card className="shadow-lg">
                 <CardContent className="pt-6 text-center text-muted-foreground">
-                    No milestones found for this child's age or milestone templates are not set up.
+                    No relevant milestones found for this child's age, or milestone templates are not yet set up in Firestore.
                 </CardContent>
             </Card>
         )}

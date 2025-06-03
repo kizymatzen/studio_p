@@ -55,6 +55,7 @@ export default function AddChildPage() {
   const [isLoading, setIsLoading] = React.useState(false);
   const [authUser, setAuthUser] = React.useState<User | null>(null);
   const [authLoading, setAuthLoading] = React.useState(true);
+  const currentYear = new Date().getFullYear();
 
   React.useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -213,6 +214,9 @@ export default function AddChildPage() {
                               date > new Date() || date < new Date("1900-01-01")
                             }
                             initialFocus
+                            captionLayout="dropdown-buttons"
+                            fromYear={1900}
+                            toYear={currentYear}
                           />
                         </PopoverContent>
                       </Popover>

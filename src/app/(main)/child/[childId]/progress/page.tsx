@@ -138,6 +138,7 @@ export default function ChildProgressPage() {
       return;
     }
     setBehaviorsLoading(true);
+    setBehaviorsError(null); // Reset error before new fetch
     const behaviorsRef = collection(db, "behaviors");
     const q = query(
       behaviorsRef,
@@ -158,15 +159,20 @@ export default function ChildProgressPage() {
       },
       (err: any) => {
         console.error("Error fetching behaviors:", err);
-        setBehaviorsError("Failed to load behavior data. " + err.message);
-        setBehaviorsLoading(false);
         if (err.code === 'failed-precondition') {
+           setBehaviorsError(
+            "The behavior chart requires a Firestore index. Please check your browser's developer console (usually F12) for a link to create it. After creating, it may take a few minutes for the index to build. The link might also be logged above this message in the console."
+          );
           toast({
             variant: "destructive",
-            title: "Missing Index",
-            description: "Firestore requires an index for this query. Please check the console for a link to create it.",
+            title: "Missing Index Required by Firestore",
+            description: "A special index is needed for behavior trends. Check your browser's developer console for a Firebase link to create it. This process can take a few minutes to build after creation.",
+            duration: 20000, 
           });
+        } else {
+          setBehaviorsError("Failed to load behavior data. " + err.message);
         }
+        setBehaviorsLoading(false);
       }
     );
     return () => unsubscribe();
@@ -196,9 +202,6 @@ export default function ChildProgressPage() {
         parseISO(Object.keys(processedData).find(key => processedData[key] === b) || "").getTime()
       );
       setChartData(dataArray);
-
-      // Dynamically update chartConfig if new "Other" types appear frequently, or stick to predefined.
-      // For now, initialChartConfig covers all predefined types.
     } else {
       setChartData([]);
     }
@@ -275,7 +278,7 @@ export default function ChildProgressPage() {
             </div>
           )}
           {!behaviorsLoading && behaviorsError && (
-            <div className="text-destructive flex flex-col items-center justify-center h-64">
+            <div className="text-destructive flex flex-col items-center justify-center h-64 p-4 text-center">
               <AlertTriangle className="h-8 w-8 mb-2" />
               <p className="font-semibold">Error loading behavior data</p>
               <p className="text-sm">{behaviorsError}</p>

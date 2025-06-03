@@ -7,50 +7,49 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, Briefcase, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-
-// Mock Firestore write
-const mockSaveUserRole = async (uid: string, email: string, role: "parent" | "professional") => {
-  return new Promise<void>((resolve) => {
-    setTimeout(() => {
-      // In a real app, this writes to Firestore: collection "users", document uid
-      // For mock, we use localStorage
-      localStorage.setItem(`user_role_${uid}`, role);
-      console.log(`Mock Firestore: Saved role '${role}' for user ${uid} (${email})`);
-      resolve();
-    }, 1500);
-  });
-};
+import { auth, db } from "@/lib/firebase";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { onAuthStateChanged, type User } from "firebase/auth";
 
 export default function SelectRolePage() {
   const router = useRouter();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = React.useState<"parent" | "professional" | null>(null);
-  const [currentUser, setCurrentUser] = React.useState<{uid: string, email: string} | null>(null);
+  const [authUser, setAuthUser] = React.useState<User | null>(null);
+  const [authLoading, setAuthLoading] = React.useState(true);
 
   React.useEffect(() => {
-    const uid = localStorage.getItem("mock_current_user_id");
-    const email = localStorage.getItem("mock_current_user_email");
-    if (uid && email) {
-      setCurrentUser({ uid, email });
-    } else {
-      // If no user info, likely direct navigation, redirect to login
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "User information not found. Please log in or sign up.",
-      });
-      router.replace("/login");
-    }
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setAuthUser(user);
+      } else {
+        setAuthUser(null);
+        toast({
+          variant: "destructive",
+          title: "Not Authenticated",
+          description: "Please log in or sign up to select a role.",
+        });
+        router.replace("/login");
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
   }, [router, toast]);
 
   const handleRoleSelection = async (role: "parent" | "professional") => {
-    if (!currentUser) {
-        toast({ variant: "destructive", title: "Error", description: "User session not found." });
+    if (!authUser) {
+        toast({ variant: "destructive", title: "Error", description: "User session not found. Please try logging in again." });
         return;
     }
     setIsLoading(role);
     try {
-      await mockSaveUserRole(currentUser.uid, currentUser.email, role);
+      await setDoc(doc(db, "users", authUser.uid), {
+        uid: authUser.uid,
+        email: authUser.email,
+        role: role,
+        createdAt: serverTimestamp(),
+      });
+
       toast({
         title: "Role Selected",
         description: `You've selected the '${role}' role. Redirecting to home...`,
@@ -66,12 +65,24 @@ export default function SelectRolePage() {
     }
   };
 
-  if (!currentUser) {
+  if (authLoading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
         <Loader2 className="h-12 w-12 animate-spin text-primary" />
-        <p className="mt-4 text-muted-foreground">Loading user data...</p>
+        <p className="mt-4 text-muted-foreground">Verifying user session...</p>
       </div>
+    );
+  }
+
+  if (!authUser) {
+    // This case should ideally be handled by the redirect in useEffect,
+    // but as a fallback, we can show a message or keep the loader.
+    // For now, the redirect should handle it.
+    return (
+         <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
+            <Loader2 className="h-12 w-12 animate-spin text-primary" />
+            <p className="mt-4 text-muted-foreground">Redirecting to login...</p>
+        </div>
     );
   }
 

@@ -9,7 +9,7 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, AlertTriangle, UserCircle, Edit, Trash2, CalendarDays, Smile, Star, Zap, ShieldCheck, Brain, Palette, Clock, ChevronLeft, FilePlus2, ListChecks, FileText, LineChart } from "lucide-react";
+import { Loader2, AlertTriangle, UserCircle, Edit, Trash2, Smile, Star, Zap, ShieldCheck, Brain, Palette, Clock, ChevronLeft, FilePlus2, ListChecks, FileText, LineChart, CheckSquare } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
@@ -19,7 +19,8 @@ interface ChildProfile {
   name: string;
   nickname?: string;
   age: number;
-  birthdate: string; // yyyy-MM-dd
+  ageInMonths?: number; // Added for milestone logic
+  birthdate: Timestamp; // Changed from string to Timestamp
   parentId: string;
   profile: {
     challenges?: string[];
@@ -45,15 +46,34 @@ interface BehaviorLog extends DocumentData {
 
 interface ProfileDetailProps {
   label: string;
-  value?: string | string[];
+  value?: string | string[] | Date; // Allow Date for birthdate
   icon?: React.ElementType;
   isList?: boolean;
+  isDate?: boolean;
 }
 
-const ProfileDetailItem: React.FC<ProfileDetailProps> = ({ label, value, icon: Icon, isList }) => {
+const ProfileDetailItem: React.FC<ProfileDetailProps> = ({ label, value, icon: Icon, isList, isDate }) => {
   if (!value || (Array.isArray(value) && value.length === 0)) {
     return null;
   }
+
+  let displayValue: React.ReactNode;
+  if (isDate && value instanceof Date) {
+    displayValue = format(value, "PPP"); // Example: Jun 1, 2020
+  } else if (isDate && value instanceof Timestamp) { // Handle Timestamp directly if needed
+    displayValue = format(value.toDate(), "PPP");
+  } else if (isList && Array.isArray(value)) {
+    displayValue = (
+      <div className="flex flex-wrap gap-2 mt-1">
+        {value.map((item) => (
+          <Badge key={item} variant="secondary">{item}</Badge>
+        ))}
+      </div>
+    );
+  } else {
+    displayValue = typeof value === 'string' ? value : value?.toString(); // Fallback for other types
+  }
+  
 
   return (
     <div className="mb-3">
@@ -62,13 +82,13 @@ const ProfileDetailItem: React.FC<ProfileDetailProps> = ({ label, value, icon: I
         {label}
       </h4>
       {isList && Array.isArray(value) ? (
-        <div className="flex flex-wrap gap-2 mt-1">
+         <div className="flex flex-wrap gap-2 mt-1">
           {value.map((item) => (
             <Badge key={item} variant="secondary">{item}</Badge>
           ))}
         </div>
       ) : (
-        <p className="text-foreground">{typeof value === 'string' ? value : value?.join(', ')}</p>
+         <p className="text-foreground">{displayValue}</p>
       )}
     </div>
   );
@@ -116,12 +136,17 @@ export default function ChildDetailPage() {
         const childDocSnap = await getDoc(childDocRef);
 
         if (childDocSnap.exists()) {
-          const childData = { id: childDocSnap.id, ...childDocSnap.data() } as ChildProfile;
-          if (childData.parentId !== authUser.uid) {
+          const childDataFromDb = childDocSnap.data();
+          const typedChildData = { 
+            id: childDocSnap.id, 
+            ...childDataFromDb 
+          } as ChildProfile;
+          
+          if (typedChildData.parentId !== authUser.uid) {
             setError("You do not have permission to view this profile.");
             setChild(null);
           } else {
-            setChild(childData);
+            setChild(typedChildData);
           }
         } else {
           setError("Child profile not found.");
@@ -158,8 +183,8 @@ export default function ChildDetailPage() {
     const unsubscribeBehaviors = onSnapshot(q,
       (snapshot) => {
         const fetchedBehaviors: BehaviorLog[] = [];
-        snapshot.forEach((doc) => {
-          fetchedBehaviors.push({ id: doc.id, ...doc.data() } as BehaviorLog);
+        snapshot.forEach((docSnap) => {
+          fetchedBehaviors.push({ id: docSnap.id, ...docSnap.data() } as BehaviorLog);
         });
         setBehaviors(fetchedBehaviors);
         setBehaviorsLoading(false);
@@ -234,6 +259,12 @@ export default function ChildDetailPage() {
               View Progress
             </Link>
           </Button>
+           <Button variant="outline" size="sm" asChild>
+            <Link href={`/milestones/${child.id}`}>
+              <CheckSquare className="mr-2 h-4 w-4" />
+              View Milestones
+            </Link>
+          </Button>
         </div>
       </div>
       
@@ -262,9 +293,9 @@ export default function ChildDetailPage() {
             <h3 className="text-xl font-semibold text-foreground mb-3 border-b pb-2">Basic Information</h3>
             <ProfileDetailItem label="Full Name" value={child.name} icon={UserCircle} />
             {child.nickname && <ProfileDetailItem label="Nickname" value={child.nickname} icon={Smile} />}
-             <p className="text-sm text-foreground mb-3">
-                <strong>Birthdate:</strong> {new Date(child.birthdate + 'T00:00:00').toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
-            </p>
+            {child.birthdate && (
+                 <ProfileDetailItem label="Birthdate" value={child.birthdate.toDate()} icon={Clock} isDate />
+            )}
             <p className="text-sm text-foreground mb-3">
                 <strong>Age:</strong> {child.age} {child.age === 1 ? "year" : "years"} old
             </p>
@@ -281,7 +312,7 @@ export default function ChildDetailPage() {
           </section>
         </CardContent>
          <CardFooter>
-          <p className="text-xs text-muted-foreground">Profile created on: {child.createdAt ? format(new Date(child.createdAt.seconds * 1000), "PPP") : 'N/A'}</p>
+          <p className="text-xs text-muted-foreground">Profile created on: {child.createdAt ? format(child.createdAt.toDate(), "PPP") : 'N/A'}</p>
         </CardFooter>
       </Card>
 
@@ -331,7 +362,7 @@ export default function ChildDetailPage() {
                       {log.type}
                     </Badge>
                     <span className="text-xs text-muted-foreground">
-                      {log.timestamp ? format(new Date(log.timestamp.seconds * 1000), "MMM d, yyyy 'at' h:mm a") : "No date"}
+                      {log.timestamp ? format(log.timestamp.toDate(), "MMM d, yyyy 'at' h:mm a") : "No date"}
                     </span>
                   </div>
                   {log.mood && <p className="text-sm text-foreground"><strong>Mood:</strong> {log.mood}</p>}
@@ -347,3 +378,4 @@ export default function ChildDetailPage() {
   );
 }
 
+    

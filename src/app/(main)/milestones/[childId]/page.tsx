@@ -1,0 +1,346 @@
+
+"use client";
+
+import * as React from "react";
+import { useParams, useRouter } from "next/navigation";
+import { doc, getDoc, collection, query, where, orderBy, onSnapshot, setDoc, serverTimestamp, Timestamp, DocumentData } from "firebase/firestore";
+import { differenceInMonths } from "date-fns";
+
+import { auth, db } from "@/lib/firebase";
+import { onAuthStateChanged, type User } from "firebase/auth";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2, AlertTriangle, CheckSquare, ChevronLeft, UserCircle2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Progress } from "@/components/ui/progress";
+
+
+interface ChildData {
+  id: string;
+  name: string;
+  birthdate: Timestamp;
+  parentId: string;
+  // other fields if needed
+}
+
+interface MilestoneTemplate {
+  id: string; // Document ID from milestoneTemplates collection
+  ageRange: string;
+  category: string;
+  description: string;
+  minAgeMonths: number;
+  maxAgeMonths: number;
+}
+
+type MilestoneStatus = "Not Started" | "In Progress" | "Achieved";
+
+interface MilestoneProgress {
+  id: string; // Corresponds to MilestoneTemplate.id
+  milestoneId: string;
+  status: MilestoneStatus;
+  dateAchieved?: Timestamp | null;
+  notes?: string;
+  // parentId could be added for direct querying/rules but often derived from parent document path
+}
+
+interface CombinedMilestone extends MilestoneTemplate {
+  currentStatus: MilestoneStatus;
+  progressDocId?: string; // ID of the document in milestoneProgress subcollection
+  dateAchieved?: Timestamp | null;
+}
+
+function getAgeInMonths(birthDateTimestamp: Timestamp): number {
+  if (!birthDateTimestamp || typeof birthDateTimestamp.toDate !== 'function') {
+    return 0; // Or handle as an error
+  }
+  const birthDate = birthDateTimestamp.toDate();
+  const now = new Date();
+  return differenceInMonths(now, birthDate);
+}
+
+const statusOptions: MilestoneStatus[] = ["Not Started", "In Progress", "Achieved"];
+
+// Placeholder for milestone templates - In a real app, fetch this from Firestore
+// Ensure these IDs match what you might have in your `milestoneTemplates` collection in Firestore.
+const MOCK_MILESTONE_TEMPLATES: MilestoneTemplate[] = [
+  { id: "smiles_socially", ageRange: "0-2 months", category: "Social/Emotional", description: "Smiles when you talk to or smile at her", minAgeMonths: 0, maxAgeMonths: 2 },
+  { id: "holds_head_up", ageRange: "0-2 months", category: "Motor (Physical)", description: "Holds head up when on tummy", minAgeMonths: 0, maxAgeMonths: 2 },
+  { id: "coos_gurgles", ageRange: "0-2 months", category: "Language/Communication", description: "Coos, makes gurgling sounds", minAgeMonths: 0, maxAgeMonths: 2 },
+  { id: "tracks_eyes", ageRange: "0-2 months", category: "Cognitive", description: "Follows things with eyes", minAgeMonths: 0, maxAgeMonths: 2 },
+  { id: "plays_pat_a_cake", ageRange: "9-12 months", category: "Social/Emotional", description: "Plays games with you, like pat-a-cake", minAgeMonths: 9, maxAgeMonths: 12 },
+  { id: "looks_for_hidden", ageRange: "9-12 months", category: "Cognitive", description: "Looks for things he sees you hide", minAgeMonths: 9, maxAgeMonths: 12 },
+  { id: "first_steps", ageRange: "12-18 months", category: "Motor (Physical)", description: "Takes first steps independently", minAgeMonths: 12, maxAgeMonths: 18 },
+  { id: "says_mama_dada", ageRange: "9-12 months", category: "Language/Communication", description: "Says 'mama' or 'dada'", minAgeMonths: 9, maxAgeMonths: 12 },
+  { id: "stacks_two_blocks", ageRange: "12-18 months", category: "Cognitive", description: "Can stack two blocks", minAgeMonths: 12, maxAgeMonths: 18 },
+];
+
+
+export default function MilestonesPage() {
+  const router = useRouter();
+  const params = useParams();
+  const childId = params.childId as string;
+  const { toast } = useToast();
+
+  const [authUser, setAuthUser] = React.useState<User | null>(null);
+  const [childData, setChildData] = React.useState<ChildData | null>(null);
+  const [ageInMonths, setAgeInMonths] = React.useState<number | null>(null);
+  
+  const [combinedMilestones, setCombinedMilestones] = React.useState<CombinedMilestone[]>([]);
+  const [milestoneStats, setMilestoneStats] = React.useState({ achieved: 0, inProgress: 0, notStarted: 0, total: 0 });
+
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (user) setAuthUser(user);
+      else router.replace("/login");
+    });
+    return () => unsubscribeAuth();
+  }, [router]);
+
+  React.useEffect(() => {
+    if (!authUser || !childId) {
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    const fetchChildAndMilestones = async () => {
+      try {
+        // 1. Fetch Child Data
+        const childDocRef = doc(db, "children", childId);
+        const childDocSnap = await getDoc(childDocRef);
+
+        if (!childDocSnap.exists() || childDocSnap.data()?.parentId !== authUser.uid) {
+          setError("Child not found or unauthorized.");
+          setChildData(null);
+          setIsLoading(false);
+          return;
+        }
+        const fetchedChildData = { id: childDocSnap.id, ...childDocSnap.data() } as ChildData;
+        setChildData(fetchedChildData);
+        const currentAgeInMonths = getAgeInMonths(fetchedChildData.birthdate);
+        setAgeInMonths(currentAgeInMonths);
+
+        // 2. Fetch Milestone Templates (Using mock for now, replace with Firestore query)
+        // For a real app:
+        // const templatesQuery = query(collection(db, "milestoneTemplates"), where("minAgeMonths", "<=", currentAgeInMonths));
+        // const templatesSnap = await getDocs(templatesQuery);
+        // const templates: MilestoneTemplate[] = templatesSnap.docs.map(d => ({ id: d.id, ...d.data() } as MilestoneTemplate));
+        const templates: MilestoneTemplate[] = MOCK_MILESTONE_TEMPLATES.filter(t => t.minAgeMonths <= currentAgeInMonths);
+
+
+        // 3. Fetch Milestone Progress (Listen for real-time updates)
+        const progressColRef = collection(db, "children", childId, "milestoneProgress");
+        const unsubscribeProgress = onSnapshot(progressColRef, (snapshot) => {
+          const progressData: MilestoneProgress[] = snapshot.docs.map(d => ({ id: d.id, ...d.data() }) as MilestoneProgress);
+          
+          // 4. Combine Templates with Progress
+          const combined = templates.map(template => {
+            const progress = progressData.find(p => p.milestoneId === template.id);
+            return {
+              ...template,
+              currentStatus: progress?.status || "Not Started",
+              progressDocId: progress?.id, // This is the doc ID from milestoneProgress, which is the template.id
+              dateAchieved: progress?.dateAchieved,
+            };
+          }).sort((a,b) => a.minAgeMonths - b.minAgeMonths || a.description.localeCompare(b.description)); // Sort for consistent display
+          
+          setCombinedMilestones(combined);
+
+          // 5. Calculate Stats
+          let achieved = 0, inProgress = 0, notStarted = 0;
+          combined.forEach(m => {
+            if (m.currentStatus === "Achieved") achieved++;
+            else if (m.currentStatus === "In Progress") inProgress++;
+            else notStarted++;
+          });
+          setMilestoneStats({ achieved, inProgress, notStarted, total: combined.length });
+          setIsLoading(false);
+        }, (err) => {
+          console.error("Error fetching milestone progress:", err);
+          setError("Failed to load milestone progress. " + err.message);
+          setIsLoading(false);
+        });
+        return unsubscribeProgress; // Return unsubscribe function for cleanup
+
+      } catch (e: any) {
+        console.error("Error fetching data:", e);
+        setError("Failed to load page data. " + e.message);
+        setIsLoading(false);
+      }
+    };
+    
+    let unsubscribe: (() => void) | undefined;
+    fetchChildAndMilestones().then(unsub => unsubscribe = unsub);
+    
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+
+  }, [authUser, childId]);
+
+  const handleStatusChange = async (milestoneId: string, newStatus: MilestoneStatus) => {
+    if (!authUser || !childId) return;
+
+    const progressDocRef = doc(db, "children", childId, "milestoneProgress", milestoneId); // Use templateId as docId
+
+    try {
+      const progressData: Partial<MilestoneProgress> = {
+        milestoneId: milestoneId, // Store the template ID
+        status: newStatus,
+      };
+      if (newStatus === "Achieved") {
+        progressData.dateAchieved = Timestamp.now();
+      } else {
+        progressData.dateAchieved = null; // Clear date if not achieved
+      }
+      
+      await setDoc(progressDocRef, progressData, { merge: true }); // merge true to create or update
+      toast({ title: "Milestone Updated", description: `Status set to ${newStatus}.` });
+    } catch (error: any) {
+      console.error("Error updating milestone status:", error);
+      toast({ variant: "destructive", title: "Update Failed", description: error.message });
+    }
+  };
+
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center p-4">
+        <Loader2 className="h-12 w-12 animate-spin text-primary" />
+        <p className="mt-4 text-muted-foreground">Loading milestones...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center p-4 text-center">
+        <AlertTriangle className="h-12 w-12 text-destructive mb-4" />
+        <h2 className="text-xl font-semibold text-destructive mb-2">Error</h2>
+        <p className="text-muted-foreground mb-6">{error}</p>
+        <Button onClick={() => router.push(`/child/${childId}`)}>
+          <ChevronLeft className="mr-2 h-4 w-4" />
+          Back to Child Profile
+        </Button>
+      </div>
+    );
+  }
+  
+  if (!childData) {
+     return (
+      <div className="flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center p-4 text-center">
+        <UserCircle2 className="h-12 w-12 text-muted-foreground mb-4" />
+        <h2 className="text-xl font-semibold text-destructive mb-2">Child Not Found</h2>
+        <p className="text-muted-foreground mb-6">Could not load child information for milestones.</p>
+         <Button onClick={() => router.push("/my-children")}>
+          <ChevronLeft className="mr-2 h-4 w-4" />
+          Back to My Children
+        </Button>
+      </div>
+    );
+  }
+
+  const { achieved, inProgress, notStarted, total } = milestoneStats;
+
+  return (
+    <div className="space-y-6">
+       <Button variant="outline" size="sm" onClick={() => router.back()} className="mb-4">
+        <ChevronLeft className="mr-2 h-4 w-4" />
+        Back
+      </Button>
+      <div className="flex items-center gap-3 mb-6">
+        <CheckSquare className="h-8 w-8 text-primary" />
+        <h1 className="font-headline text-3xl font-bold">Milestone Progress</h1>
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-6 items-start">
+        <Card className="md:col-span-1 shadow-lg">
+          <CardHeader>
+            <CardTitle className="text-xl">{childData.name}</CardTitle>
+            <CardDescription>Age: {ageInMonths !== null ? `${Math.floor(ageInMonths / 12)} years, ${ageInMonths % 12} months` : 'Loading...'}</CardDescription>
+          </CardHeader>
+        </Card>
+
+        <Card className="md:col-span-2 shadow-lg">
+          <CardHeader>
+            <CardTitle className="text-xl">Milestone Summary</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div>
+              <div className="flex justify-between text-sm mb-1">
+                <span>Achieved</span>
+                <span>{achieved} / {total}</span>
+              </div>
+              <Progress value={total > 0 ? (achieved / total) * 100 : 0} className="h-3 bg-green-500/80" />
+            </div>
+            <div>
+              <div className="flex justify-between text-sm mb-1">
+                <span>In Progress</span>
+                <span>{inProgress} / {total}</span>
+              </div>
+              <Progress value={total > 0 ? (inProgress / total) * 100 : 0} className="h-3 bg-yellow-500/80" />
+            </div>
+            <div>
+              <div className="flex justify-between text-sm mb-1">
+                <span>Not Started</span>
+                <span>{notStarted} / {total}</span>
+              </div>
+              <Progress value={total > 0 ? (notStarted / total) * 100 : 0} className="h-3 bg-gray-400/80" />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="space-y-4 mt-6">
+        {combinedMilestones.length === 0 && !isLoading && (
+            <Card className="shadow-lg">
+                <CardContent className="pt-6 text-center text-muted-foreground">
+                    No milestones found for this child's age or milestone templates are not set up.
+                </CardContent>
+            </Card>
+        )}
+        {combinedMilestones.map((milestone) => (
+          <Card key={milestone.id} className="shadow-md">
+            <CardContent className="pt-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div className="flex-1">
+                <p className="font-semibold text-foreground">{milestone.description}</p>
+                <p className="text-sm text-muted-foreground">
+                  {milestone.category} - Relevant for: {milestone.ageRange}
+                </p>
+                {milestone.currentStatus === "Achieved" && milestone.dateAchieved && (
+                   <p className="text-xs text-green-600">Achieved on: {format(milestone.dateAchieved.toDate(), "PP")}</p>
+                )}
+              </div>
+              <div className="w-full md:w-48 mt-2 md:mt-0">
+                <Select
+                  value={milestone.currentStatus}
+                  onValueChange={(newStatus: MilestoneStatus) => handleStatusChange(milestone.id, newStatus)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Set status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {statusOptions.map(status => (
+                      <SelectItem key={status} value={status}>
+                        {status}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+    

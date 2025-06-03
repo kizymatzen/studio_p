@@ -6,7 +6,9 @@ import { useRouter } from "next/navigation";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { format, differenceInYears, isValid, getDaysInMonth as getDaysInMonthFns } from "date-fns";
+import { differenceInYears, isValid, getDaysInMonth as getDaysInMonthFns, differenceInMonths } from "date-fns";
+import { Timestamp } from "firebase/firestore";
+
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,14 +48,14 @@ const addChildSchema = z.object({
   profile: profileSchema,
 }).refine(data => {
   const year = parseInt(data.birthYear, 10);
-  const month = parseInt(data.birthMonth, 10); // 1-indexed
+  const month = parseInt(data.birthMonth, 10);
   const day = parseInt(data.birthDay, 10);
   if (isNaN(year) || isNaN(month) || isNaN(day)) return false;
-  const date = new Date(year, month - 1, day); // month is 0-indexed for Date constructor
+  const date = new Date(year, month - 1, day);
   return isValid(date) && date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
 }, {
   message: "Invalid birthdate. Please check day, month, and year.",
-  path: ["birthDay"], // You can also use a more general path or target all three fields
+  path: ["birthDay"],
 });
 
 type AddChildFormValues = z.infer<typeof addChildSchema>;
@@ -115,14 +117,10 @@ export default function AddChildPage() {
   React.useEffect(() => {
     if (watchedYear && watchedMonth) {
       const yearNum = parseInt(watchedYear, 10);
-      const monthNum = parseInt(watchedMonth, 10); // 1-indexed
+      const monthNum = parseInt(watchedMonth, 10);
       if (!isNaN(yearNum) && !isNaN(monthNum) && monthNum >= 1 && monthNum <= 12) {
-        // For getDaysInMonthFns, month is 0-indexed if Date object is passed, 
-        // or use month number directly if numbers are passed.
-        // new Date(year, month, 0).getDate() is safer. Month is 1-indexed.
         const numDays = getDaysInMonthFns(new Date(yearNum, monthNum - 1));
         setDaysInSelectedMonth(Array.from({ length: numDays }, (_, i) => (i + 1).toString()));
-        // Reset day if current day is invalid for new month/year
         const currentDay = parseInt(form.getValues("birthDay"), 10);
         if (currentDay > numDays) {
           form.setValue("birthDay", "");
@@ -134,11 +132,11 @@ export default function AddChildPage() {
   React.useEffect(() => {
     if (watchedYear && watchedMonth && watchedDay) {
       const yearNum = parseInt(watchedYear, 10);
-      const monthNum = parseInt(watchedMonth, 10); // 1-indexed
+      const monthNum = parseInt(watchedMonth, 10);
       const dayNum = parseInt(watchedDay, 10);
 
       if (!isNaN(yearNum) && !isNaN(monthNum) && !isNaN(dayNum)) {
-        const birthDate = new Date(yearNum, monthNum - 1, dayNum); // month is 0-indexed
+        const birthDate = new Date(yearNum, monthNum - 1, dayNum);
         if (isValid(birthDate) && birthDate.getFullYear() === yearNum && birthDate.getMonth() === monthNum - 1 && birthDate.getDate() === dayNum) {
           setCalculatedAge(differenceInYears(new Date(), birthDate));
         } else {
@@ -161,10 +159,10 @@ export default function AddChildPage() {
     setIsLoading(true);
 
     const year = parseInt(data.birthYear, 10);
-    const month = parseInt(data.birthMonth, 10); // 1-indexed from form
+    const month = parseInt(data.birthMonth, 10);
     const day = parseInt(data.birthDay, 10);
     
-    const birthDateObject = new Date(year, month - 1, day); // month is 0-indexed for Date constructor
+    const birthDateObject = new Date(year, month - 1, day);
 
     if (!isValid(birthDateObject) || birthDateObject.getFullYear() !== year || birthDateObject.getMonth() !== month - 1 || birthDateObject.getDate() !== day) {
        toast({ variant: "destructive", title: "Invalid Date", description: "The selected date is not valid." });
@@ -173,13 +171,15 @@ export default function AddChildPage() {
     }
     
     const age = differenceInYears(new Date(), birthDateObject);
+    const ageInMonths = differenceInMonths(new Date(), birthDateObject);
 
     try {
       const childData = {
         name: data.name,
         nickname: data.nickname || "",
-        birthdate: format(birthDateObject, "yyyy-MM-dd"),
+        birthdate: Timestamp.fromDate(birthDateObject), // Store as Firestore Timestamp
         age,
+        ageInMonths, // Store age in months for milestone logic
         parentId: authUser.uid,
         profile: data.profile,
         createdAt: serverTimestamp(),
@@ -568,4 +568,4 @@ export default function AddChildPage() {
   );
 }
 
-      
+    

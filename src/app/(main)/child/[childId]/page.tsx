@@ -3,15 +3,16 @@
 
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
-import { doc, getDoc, Timestamp } from "firebase/firestore";
+import { doc, getDoc, Timestamp, collection, query, where, orderBy, onSnapshot, DocumentData } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, AlertTriangle, UserCircle, Edit, Trash2, CalendarDays, Smile, Star, Zap, ShieldCheck, Brain, Palette, Clock, ChevronLeft, FilePlus2 } from "lucide-react";
+import { Loader2, AlertTriangle, UserCircle, Edit, Trash2, CalendarDays, Smile, Star, Zap, ShieldCheck, Brain, Palette, Clock, ChevronLeft, FilePlus2, ListChecks, FileText } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { format } from "date-fns";
 
 interface ChildProfile {
   id: string;
@@ -29,6 +30,17 @@ interface ChildProfile {
     energy?: string;
   };
   createdAt: Timestamp;
+}
+
+interface BehaviorLog extends DocumentData {
+  id: string;
+  childId: string;
+  parentId: string;
+  type: string;
+  mood?: string;
+  notes?: string;
+  location?: string;
+  timestamp: Timestamp;
 }
 
 interface ProfileDetailProps {
@@ -73,6 +85,11 @@ export default function ChildDetailPage() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
+  const [behaviors, setBehaviors] = React.useState<BehaviorLog[]>([]);
+  const [behaviorsLoading, setBehaviorsLoading] = React.useState(true);
+  const [behaviorsError, setBehaviorsError] = React.useState<string | null>(null);
+
+
   React.useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       if (user) {
@@ -87,7 +104,6 @@ export default function ChildDetailPage() {
   React.useEffect(() => {
     if (!authUser || !childId) {
       if (!childId) setError("Child ID is missing.");
-      // Don't set loading to false here if authUser is null yet, wait for auth state
       if (authUser && !childId) setIsLoading(false);
       return;
     }
@@ -101,7 +117,6 @@ export default function ChildDetailPage() {
 
         if (childDocSnap.exists()) {
           const childData = { id: childDocSnap.id, ...childDocSnap.data() } as ChildProfile;
-          // Security check: ensure the logged-in user is the parent
           if (childData.parentId !== authUser.uid) {
             setError("You do not have permission to view this profile.");
             setChild(null);
@@ -121,9 +136,46 @@ export default function ChildDetailPage() {
     };
 
     fetchChildData();
-  }, [authUser, childId, router]);
+  }, [authUser, childId]);
 
-  if (isLoading || !authUser) { // Keep loading if authUser is not yet available or still loading data
+  React.useEffect(() => {
+    if (!authUser || !childId) {
+      setBehaviorsLoading(false);
+      return;
+    }
+
+    setBehaviorsLoading(true);
+    setBehaviorsError(null);
+
+    const behaviorsRef = collection(db, "behaviors");
+    const q = query(
+      behaviorsRef,
+      where("childId", "==", childId),
+      where("parentId", "==", authUser.uid),
+      orderBy("timestamp", "desc")
+    );
+
+    const unsubscribeBehaviors = onSnapshot(q,
+      (snapshot) => {
+        const fetchedBehaviors: BehaviorLog[] = [];
+        snapshot.forEach((doc) => {
+          fetchedBehaviors.push({ id: doc.id, ...doc.data() } as BehaviorLog);
+        });
+        setBehaviors(fetchedBehaviors);
+        setBehaviorsLoading(false);
+      },
+      (err) => {
+        console.error("Error fetching behaviors:", err);
+        setBehaviorsError("Failed to load behavior log. Please try again. " + err.message);
+        setBehaviorsLoading(false);
+      }
+    );
+
+    return () => unsubscribeBehaviors();
+  }, [authUser, childId]);
+
+
+  if (isLoading || !authUser) {
     return (
       <div className="flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center p-4">
         <Loader2 className="h-12 w-12 animate-spin text-primary" />
@@ -162,8 +214,6 @@ export default function ChildDetailPage() {
     );
   }
   
-  const birthDateObj = new Date(child.birthdate + 'T00:00:00'); // Ensure correct parsing by specifying time part
-
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center mb-4">
@@ -223,9 +273,69 @@ export default function ChildDetailPage() {
           </section>
         </CardContent>
          <CardFooter>
-          <p className="text-xs text-muted-foreground">Profile created on: {child.createdAt ? new Date(child.createdAt.seconds * 1000).toLocaleDateString() : 'N/A'}</p>
+          <p className="text-xs text-muted-foreground">Profile created on: {child.createdAt ? format(new Date(child.createdAt.seconds * 1000), "PPP") : 'N/A'}</p>
         </CardFooter>
+      </Card>
+
+      <Card className="shadow-lg">
+        <CardHeader>
+          <CardTitle className="font-headline text-2xl flex items-center gap-2">
+            <ListChecks className="h-6 w-6 text-primary" />
+            Behavior Log
+          </CardTitle>
+          <CardDescription>Recent behaviors logged for {child.name}.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {behaviorsLoading && (
+            <div className="flex flex-col items-center justify-center py-6">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="mt-3 text-muted-foreground">Loading behavior log...</p>
+            </div>
+          )}
+          {!behaviorsLoading && behaviorsError && (
+            <div className="flex flex-col items-center justify-center py-6 text-destructive">
+              <AlertTriangle className="h-8 w-8" />
+              <p className="mt-3 font-semibold">Error Loading Behaviors</p>
+              <p className="text-sm text-center">{behaviorsError}</p>
+            </div>
+          )}
+          {!behaviorsLoading && !behaviorsError && behaviors.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-6 text-center">
+              <FileText className="h-10 w-10 text-muted-foreground mb-3" />
+              <p className="text-lg font-semibold text-foreground">No Behaviors Logged Yet</p>
+              <p className="text-muted-foreground">
+                Start by logging a behavior for {child.name}.
+              </p>
+              <Button variant="outline" size="sm" asChild className="mt-4">
+                <Link href={`/child/${child.id}/log-behavior`}>
+                  <FilePlus2 className="mr-2 h-4 w-4" />
+                  Log First Behavior
+                </Link>
+              </Button>
+            </div>
+          )}
+          {!behaviorsLoading && !behaviorsError && behaviors.length > 0 && (
+            <ul className="space-y-4">
+              {behaviors.map((log) => (
+                <li key={log.id} className="p-4 border rounded-md shadow-sm bg-card/50">
+                  <div className="flex justify-between items-start mb-2">
+                    <Badge variant={log.type.toLowerCase().includes("happy") || log.type.toLowerCase().includes("playful") ? "default" : "secondary"}>
+                      {log.type}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">
+                      {log.timestamp ? format(new Date(log.timestamp.seconds * 1000), "MMM d, yyyy 'at' h:mm a") : "No date"}
+                    </span>
+                  </div>
+                  {log.mood && <p className="text-sm text-foreground"><strong>Mood:</strong> {log.mood}</p>}
+                  {log.notes && <p className="text-sm text-foreground mt-1 whitespace-pre-wrap"><strong>Notes:</strong> {log.notes}</p>}
+                  {log.location && <p className="text-xs text-muted-foreground mt-2"><strong>Location:</strong> {log.location}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
       </Card>
     </div>
   );
 }
+

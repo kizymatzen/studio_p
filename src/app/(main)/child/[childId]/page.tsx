@@ -9,7 +9,7 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, AlertTriangle, UserCircle, Edit, Trash2, CalendarDays, Smile, Star, Zap, ShieldCheck, Brain, Palette, Clock, ChevronLeft, FilePlus2, ListChecks, FileText } from "lucide-react";
+import { Loader2, AlertTriangle, UserCircle, Edit, Trash2, CalendarDays, Smile, Star, Zap, ShieldCheck, Brain, Palette, Clock, ChevronLeft, FilePlus2, ListChecks, FileText, LineChart } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
@@ -216,17 +216,25 @@ export default function ChildDetailPage() {
   
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => router.back()}>
           <ChevronLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
-        <Button variant="default" size="sm" asChild>
-          <Link href={`/child/${child.id}/log-behavior`}>
-            <FilePlus2 className="mr-2 h-4 w-4" />
-            Log Behavior
-          </Link>
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="default" size="sm" asChild>
+            <Link href={`/child/${child.id}/log-behavior`}>
+              <FilePlus2 className="mr-2 h-4 w-4" />
+              Log Behavior
+            </Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/child/${child.id}/progress`}>
+              <LineChart className="mr-2 h-4 w-4" />
+              View Progress
+            </Link>
+          </Button>
+        </div>
       </div>
       
 

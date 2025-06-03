@@ -1,3 +1,4 @@
+
 "use client";
 
 import Link from 'next/link';
@@ -10,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, Settings, Users, UsersRound } from "lucide-react";
+import { LogOut, Settings, Users, UsersRound, Baby } from "lucide-react"; // Added Baby icon
 
 export function ProfileMenu() {
   // In a real app, user data would come from context or props
@@ -29,6 +30,12 @@ export function ProfileMenu() {
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuLabel>My Account</DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/add-child" className="flex items-center gap-2 cursor-pointer">
+            <Baby className="h-4 w-4" />
+            <span>Add Child</span>
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link href="/my-children" className="flex items-center gap-2 cursor-pointer">
             <Users className="h-4 w-4" />

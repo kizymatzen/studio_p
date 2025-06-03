@@ -4,7 +4,7 @@
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
 import { doc, getDoc, collection, query, where, orderBy, onSnapshot, setDoc, serverTimestamp, Timestamp, DocumentData, getDocs } from "firebase/firestore";
-import { differenceInMonths, format } from "date-fns";
+import { differenceInMonths, format, isValid } from "date-fns";
 
 import { auth, db } from "@/lib/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
@@ -20,9 +20,8 @@ import { Progress } from "@/components/ui/progress";
 interface ChildData {
   id: string;
   name: string;
-  birthdate: Timestamp;
+  birthdate: Timestamp; // Expecting a valid Timestamp after processing
   parentId: string;
-  // other fields if needed
 }
 
 interface MilestoneTemplate {
@@ -46,7 +45,7 @@ interface MilestoneProgress {
 
 interface CombinedMilestone extends MilestoneTemplate {
   currentStatus: MilestoneStatus;
-  progressDocId?: string; // ID of the document in milestoneProgress subcollection (which is template.id)
+  progressDocId?: string; 
   dateAchieved?: Timestamp | null;
 }
 
@@ -108,7 +107,39 @@ export default function MilestonesPage() {
           setIsLoading(false);
           return;
         }
-        const fetchedChildData = { id: childDocSnap.id, ...childDocSnap.data() } as ChildData;
+        
+        const rawData = childDocSnap.data();
+        let processedBirthdate: Timestamp | undefined = undefined;
+
+        if (rawData?.birthdate) {
+          if (rawData.birthdate instanceof Timestamp) {
+            processedBirthdate = rawData.birthdate;
+          } else if (typeof rawData.birthdate === 'string') {
+            const parsedDate = new Date(rawData.birthdate);
+            if (isValid(parsedDate)) {
+              processedBirthdate = Timestamp.fromDate(parsedDate);
+            } else {
+              console.warn(`Child ${childDocSnap.id} on MilestonesPage has invalid birthdate string: ${rawData.birthdate}`);
+            }
+          } else if (typeof rawData.birthdate === 'object' && rawData.birthdate.seconds !== undefined && rawData.birthdate.nanoseconds !== undefined) {
+            try {
+              processedBirthdate = new Timestamp(rawData.birthdate.seconds, rawData.birthdate.nanoseconds);
+            } catch (e) {
+               console.warn(`Child ${childDocSnap.id} on MilestonesPage has an object-like birthdate that could not be converted to Timestamp:`, rawData.birthdate, e);
+            }
+          } else {
+            console.warn(`Child ${childDocSnap.id} on MilestonesPage has an unrecognized birthdate format:`, rawData.birthdate);
+          }
+        }
+        
+        // Cast to ChildData; birthdate could still be undefined if processing failed
+        const fetchedChildData = { 
+            id: childDocSnap.id, 
+            name: rawData?.name || "Unnamed Child",
+            birthdate: processedBirthdate as Timestamp, // Will be checked below
+            parentId: rawData?.parentId || ""
+        } as ChildData;
+        
         setChildData(fetchedChildData);
         
         if (!fetchedChildData.birthdate || typeof fetchedChildData.birthdate.toDate !== 'function') {
@@ -124,7 +155,7 @@ export default function MilestonesPage() {
         const templatesQuery = query(
           templatesColRef,
           where("minAgeMonths", "<=", currentAgeInMonths),
-          // where("maxAgeMonths", ">=", currentAgeInMonths) // Uncomment if you only want currently relevant, not all up to age
+          // where("maxAgeMonths", ">=", currentAgeInMonths) // Can enable for stricter age range
         );
         const templatesSnapshot = await getDocs(templatesQuery);
         const templates: MilestoneTemplate[] = templatesSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as MilestoneTemplate));
@@ -138,20 +169,18 @@ export default function MilestonesPage() {
         const unsubscribeProgress = onSnapshot(progressColRef, (snapshot) => {
           const progressData: MilestoneProgress[] = snapshot.docs.map(d => ({ id: d.id, ...d.data() }) as MilestoneProgress);
           
-          // 4. Combine Templates with Progress
           const combined = templates.map(template => {
             const progress = progressData.find(p => p.milestoneId === template.id);
             return {
               ...template,
               currentStatus: progress?.status || "Not Started",
-              progressDocId: progress?.id, // This is the doc ID from milestoneProgress, which is template.id
+              progressDocId: progress?.id,
               dateAchieved: progress?.dateAchieved,
             };
           }).sort((a,b) => a.minAgeMonths - b.minAgeMonths || a.description.localeCompare(b.description));
           
           setCombinedMilestones(combined);
 
-          // 5. Calculate Stats
           let achieved = 0, inProgress = 0, notStarted = 0;
           combined.forEach(m => {
             if (m.currentStatus === "Achieved") achieved++;
@@ -184,7 +213,7 @@ export default function MilestonesPage() {
             toast({
                 variant: "destructive",
                 title: "Firestore Index Required for Templates",
-                description: "Loading milestone templates failed. Check the browser console for a Firebase link to create the necessary index (likely on 'milestoneTemplates' for 'minAgeMonths' and 'maxAgeMonths').",
+                description: "Loading milestone templates failed. Check the browser console for a Firebase link to create the necessary index (likely on 'milestoneTemplates' for 'minAgeMonths' and/or 'maxAgeMonths').",
                 duration: 15000,
             });
         } else {
@@ -209,7 +238,7 @@ export default function MilestonesPage() {
     const progressDocRef = doc(db, "children", childId, "milestoneProgress", milestoneId);
 
     try {
-      const progressDataUpdate: Partial<Omit<MilestoneProgress, 'id'>> = { // Omit 'id' as it's the doc key
+      const progressDataUpdate: Partial<Omit<MilestoneProgress, 'id'>> = { 
         milestoneId: milestoneId,
         status: newStatus,
       };

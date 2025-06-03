@@ -10,12 +10,13 @@ import { auth, db } from "@/lib/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { doc, getDoc, collection, query, where, orderBy, onSnapshot, Timestamp, DocumentData } from "firebase/firestore";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ChartConfig, ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { ChartConfig, ChartContainer } from "@/components/ui/chart"; // ChartTooltipContent removed as we define a custom one
 import { Loader2, AlertTriangle, ChevronLeft, BarChart2, Target, BookOpen, Award, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
 
 interface ChildData {
   id: string;
@@ -64,6 +65,69 @@ const initialChartConfig: ChartConfig = behaviorTypesForChart.reduce((acc, type)
 }, {} as ChartConfig);
 
 
+// Custom Tooltip Content Component
+const CustomBehaviorChartTooltipContent = ({ active, payload, label, config }: { active?: boolean; payload?: any[]; label?: string | number; config: ChartConfig }) => {
+  if (!active || !payload || payload.length === 0) {
+    return null;
+  }
+
+  const filteredPayload = payload.filter((pItem: any) => pItem.value !== undefined && pItem.value > 0);
+
+  if (filteredPayload.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="grid min-w-[8rem] items-start gap-1.5 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs shadow-xl">
+      {label && <div className={cn("font-medium")}>{label}</div>}
+      <div className="grid gap-1.5">
+        {filteredPayload.map((item: any, index: number) => {
+          const itemConfig = config && item.name && config[item.name] ? config[item.name] : { label: item.name };
+          const indicatorColor = item.color || item.payload?.fill || (itemConfig?.color as string);
+
+          return (
+            <div
+              key={`tooltip-item-${index}-${item.name}`}
+              className={cn(
+                "flex w-full flex-wrap items-stretch gap-2 [&>svg]:h-2.5 [&>svg]:w-2.5 [&>svg]:text-muted-foreground"
+              )}
+            >
+              <div
+                className={cn(
+                  "shrink-0 rounded-[2px] border-[--color-border] bg-[--color-bg]",
+                  "h-2.5 w-2.5" // indicator === "dot"
+                )}
+                style={
+                  {
+                    "--color-bg": indicatorColor,
+                    "--color-border": indicatorColor,
+                  } as React.CSSProperties
+                }
+              />
+              <div
+                className={cn(
+                  "flex flex-1 justify-between leading-none",
+                  "items-center" 
+                )}
+              >
+                <span className="text-muted-foreground">
+                  {itemConfig?.label || item.name}
+                </span>
+                {item.value !== undefined && (
+                  <span className="font-mono font-medium tabular-nums text-foreground">
+                    {item.value.toLocaleString()}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+
 export default function ChildProgressPage() {
   const router = useRouter();
   const params = useParams();
@@ -79,7 +143,9 @@ export default function ChildProgressPage() {
   const [behaviorsLoading, setBehaviorsLoading] = React.useState(true);
   const [behaviorsError, setBehaviorsError] = React.useState<string | null>(null);
   const [chartData, setChartData] = React.useState<any[]>([]);
-  const [chartConfig, setChartConfig] = React.useState<ChartConfig>(initialChartConfig);
+  // chartConfig state is not strictly needed if initialChartConfig is constant
+  // but if it were dynamic (e.g. user toggles visibility of series), it would be useful
+  const [chartConfig] = React.useState<ChartConfig>(initialChartConfig);
 
 
   React.useEffect(() => {
@@ -138,13 +204,13 @@ export default function ChildProgressPage() {
       return;
     }
     setBehaviorsLoading(true);
-    setBehaviorsError(null); // Reset error before new fetch
+    setBehaviorsError(null); 
     const behaviorsRef = collection(db, "behaviors");
     const q = query(
       behaviorsRef,
       where("childId", "==", childId),
       where("parentId", "==", authUser.uid),
-      orderBy("timestamp", "asc") // Ascending for chronological processing
+      orderBy("timestamp", "asc") 
     );
 
     const unsubscribe = onSnapshot(q,
@@ -160,7 +226,7 @@ export default function ChildProgressPage() {
       (err: any) => {
         console.error("Error fetching behaviors:", err);
         if (err.code === 'failed-precondition') {
-           const detailedIndexErrorMessage = "The behavior chart requires a Firestore index. Please check your browser's developer console (usually F12) for a link to create it. After creating, it may take a few minutes for the index to build. If the Firebase console says the index 'already exists', please ensure it is for the 'behaviors' collection and has these exact fields in order: 1. childId (Ascending), 2. parentId (Ascending), 3. timestamp (Ascending). An incorrect existing index can cause this issue.";
+          const detailedIndexErrorMessage = "The behavior chart requires a Firestore index. Please check your browser's developer console (usually F12) for a link from Firebase to create it. This link will set up the index with fields: 1. childId (Ascending), 2. parentId (Ascending), 3. timestamp (Ascending). If the Firebase console states an index 'already exists' but is not identical to this (including field order and direction), it may cause this error. After creating/correcting, it may take a few minutes for the index to build.";
           setBehaviorsError(detailedIndexErrorMessage);
           toast({
             variant: "destructive",
@@ -182,29 +248,32 @@ export default function ChildProgressPage() {
       const processedData: { [date: string]: { date: string } & { [type: string]: number } } = {};
 
       behaviors.forEach(log => {
-        if (log.timestamp && typeof log.timestamp.toDate === 'function') { // Check if timestamp is valid
+        // Ensure timestamp is valid and has toDate method
+        if (log.timestamp && typeof log.timestamp.toDate === 'function') { 
           const dateStr = formatDateFns(log.timestamp.toDate(), "yyyy-MM-dd");
           if (!processedData[dateStr]) {
-            processedData[dateStr] = { date: formatDateFns(log.timestamp.toDate(), "MMM d") }; // For X-axis label
+            processedData[dateStr] = { date: formatDateFns(log.timestamp.toDate(), "MMM d") }; 
             behaviorTypesForChart.forEach(type => {
               processedData[dateStr][type] = 0;
             });
           }
-          if (behaviorTypesForChart.includes(log.type as any)) {
+          // Check if log.type is one of the defined behavior types
+          if (behaviorTypesForChart.includes(log.type as typeof behaviorTypesForChart[number])) {
             processedData[dateStr][log.type] = (processedData[dateStr][log.type] || 0) + 1;
           } else {
              processedData[dateStr]["Other"] = (processedData[dateStr]["Other"] || 0) + 1;
           }
         } else {
-          console.warn("Skipping behavior log due to invalid timestamp:", log);
+          console.warn("Skipping behavior log due to invalid or missing timestamp:", log);
         }
       });
       
       const dataArray = Object.values(processedData).sort((a, b) => {
-          const dateA = Object.keys(processedData).find(key => processedData[key] === a);
-          const dateB = Object.keys(processedData).find(key => processedData[key] === b);
-          if (dateA && dateB) {
-            return parseISO(dateA).getTime() - parseISO(dateB).getTime();
+          // Find the original yyyy-MM-dd keys to sort by actual date
+          const dateAKey = Object.keys(processedData).find(key => processedData[key] === a);
+          const dateBKey = Object.keys(processedData).find(key => processedData[key] === b);
+          if (dateAKey && dateBKey) {
+            return parseISO(dateAKey).getTime() - parseISO(dateBKey).getTime();
           }
           return 0;
         }
@@ -307,20 +376,27 @@ export default function ChildProgressPage() {
                   tickLine={false}
                   tickMargin={10}
                   axisLine={false}
-                  tickFormatter={(value) => value} // Already formatted to 'MMM d'
+                  tickFormatter={(value) => value} 
                 />
                 <YAxis allowDecimals={false} />
                 <RechartsTooltip 
                   cursor={false}
-                  content={<ChartTooltipContent indicator="dot" />} 
+                  content={({ active, payload, label }) => (
+                    <CustomBehaviorChartTooltipContent
+                      active={active}
+                      payload={payload}
+                      label={label}
+                      config={chartConfig}
+                    />
+                  )}
                 />
                 {behaviorTypesForChart.map((type) => (
                   <Bar
                     key={type}
                     dataKey={type}
-                    fill={chartConfig[type]?.color || "hsl(var(--muted))"}
+                    fill={chartConfig[type]?.color as string || "hsl(var(--muted))"}
                     radius={4}
-                    stackId="a" // To stack bars
+                    stackId="a" 
                   />
                 ))}
               </BarChart>
@@ -347,7 +423,6 @@ export default function ChildProgressPage() {
         </CardHeader>
         <CardContent>
           <p className="text-muted-foreground">This section will show helpful content you've engaged with. Feature under construction.</p>
-          {/* Placeholder items */}
           <ul className="mt-2 space-y-1 text-sm">
             <li>✅ Used: Tip - "Belly Breathing" (May 20)</li>
             <li>✅ Used: Story - "The Sharing Squirrel" (May 18)</li>

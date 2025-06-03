@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { LogIn, Lock, Mail, Loader2 } from "lucide-react";
+import { LogIn, Lock, Mail, Loader2, Eye, EyeOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { signInWithEmailAndPassword, type UserCredential } from "firebase/auth";
 import { auth } from "@/lib/firebase";
@@ -28,13 +28,16 @@ const loginUser = async (email: string, password: string) => {
     const userCredential: UserCredential = await signInWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
     // Firebase handles session, no need to manually store in localStorage here
+    // However, for the mock role system, we'll temporarily keep this until Firestore is fully integrated.
+    localStorage.setItem("mock_current_user_id", user.uid);
+    localStorage.setItem("mock_current_user_email", user.email || "");
     return { uid: user.uid, email: user.email };
   } catch (error: any) {
-    // Firebase errors often have a 'code' property like 'auth/wrong-password' or 'auth/user-not-found'
-    // You can customize messages based on error.code
     let errorMessage = "Login failed. Please check your credentials.";
     if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password') {
       errorMessage = "Invalid email or password.";
+    } else if (error.code === 'auth/invalid-email') {
+      errorMessage = "Invalid email format.";
     } else if (error.code) {
       errorMessage = error.code.replace('auth/', '').replace(/-/g, ' ') + '.';
       errorMessage = errorMessage.charAt(0).toUpperCase() + errorMessage.slice(1);
@@ -50,6 +53,7 @@ export default function LoginPage() {
   const router = useRouter();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = React.useState(false);
+  const [showPassword, setShowPassword] = React.useState(false);
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -67,9 +71,7 @@ export default function LoginPage() {
         title: "Login Successful",
         description: "Redirecting...",
       });
-      // Firebase's onAuthStateChanged listener should handle user state globally
-      // We still redirect to role-check which will verify role based on the logged-in user
-      router.push("/role-check"); 
+      router.push("/role-check");
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -118,9 +120,25 @@ export default function LoginPage() {
                       <Lock className="mr-2 h-4 w-4 text-muted-foreground" />
                       Password
                     </FormLabel>
-                    <FormControl>
-                      <Input type="password" placeholder="••••••••" {...field} />
-                    </FormControl>
+                    <div className="relative">
+                      <FormControl>
+                        <Input
+                          type={showPassword ? "text" : "password"}
+                          placeholder="••••••••"
+                          {...field}
+                        />
+                      </FormControl>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground hover:bg-transparent"
+                        onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                      >
+                        {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                      </Button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}

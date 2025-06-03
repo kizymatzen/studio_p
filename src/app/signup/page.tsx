@@ -11,8 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { UserPlus, Lock, Mail, Loader2 } from "lucide-react";
+import { UserPlus, Lock, Mail, Loader2, Eye, EyeOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { createUserWithEmailAndPassword, type UserCredential } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+
 
 const signupSchema = z.object({
   email: z.string().email({ message: "Invalid email address." }),
@@ -20,27 +23,44 @@ const signupSchema = z.object({
   confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match.",
-  path: ["confirmPassword"], // Path to field that gets the error
+  path: ["confirmPassword"],
 });
 
 type SignupFormValues = z.infer<typeof signupSchema>;
 
-// Mock Firebase Auth sign-up
-const mockSignUp = async (email: string, password: string) => {
-  return new Promise<{ uid: string; email: string }>((resolve) => {
-    setTimeout(() => {
-      const uid = `mock_uid_${email.split('@')[0]}_${Date.now()}`;
-      localStorage.setItem("mock_current_user_id", uid);
-      localStorage.setItem("mock_current_user_email", email);
-      resolve({ uid, email });
-    }, 1500);
-  });
+const signUpUser = async (email: string, password: string) => {
+  try {
+    const userCredential: UserCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+    // Store user info in localStorage for the mock role system
+    // In a real app with Firestore, this might not be needed here if role selection immediately follows
+    localStorage.setItem("mock_current_user_id", user.uid);
+    localStorage.setItem("mock_current_user_email", user.email || "");
+    return { uid: user.uid, email: user.email };
+  } catch (error: any) {
+    let errorMessage = "Sign up failed. Please try again.";
+     if (error.code === 'auth/email-already-in-use') {
+      errorMessage = "This email address is already in use.";
+    } else if (error.code === 'auth/invalid-email') {
+      errorMessage = "Invalid email format.";
+    } else if (error.code === 'auth/weak-password') {
+      errorMessage = "Password is too weak. Please choose a stronger password.";
+    } else if (error.code) {
+      errorMessage = error.code.replace('auth/', '').replace(/-/g, ' ') + '.';
+      errorMessage = errorMessage.charAt(0).toUpperCase() + errorMessage.slice(1);
+    } else {
+      errorMessage = error.message || "An unexpected error occurred during sign up.";
+    }
+    throw new Error(errorMessage);
+  }
 };
 
 export default function SignupPage() {
   const router = useRouter();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = React.useState(false);
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
 
   const form = useForm<SignupFormValues>({
     resolver: zodResolver(signupSchema),
@@ -54,7 +74,7 @@ export default function SignupPage() {
   const onSubmit = async (data: SignupFormValues) => {
     setIsLoading(true);
     try {
-      await mockSignUp(data.email, data.password);
+      await signUpUser(data.email, data.password);
       toast({
         title: "Sign Up Successful",
         description: "Redirecting to select your role...",
@@ -108,9 +128,25 @@ export default function SignupPage() {
                       <Lock className="mr-2 h-4 w-4 text-muted-foreground" />
                       Password
                     </FormLabel>
-                    <FormControl>
-                      <Input type="password" placeholder="••••••••" {...field} />
-                    </FormControl>
+                    <div className="relative">
+                      <FormControl>
+                        <Input
+                          type={showPassword ? "text" : "password"}
+                          placeholder="••••••••"
+                          {...field}
+                        />
+                      </FormControl>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground hover:bg-transparent"
+                        onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                      >
+                        {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                      </Button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -124,9 +160,25 @@ export default function SignupPage() {
                       <Lock className="mr-2 h-4 w-4 text-muted-foreground" />
                       Confirm Password
                     </FormLabel>
-                    <FormControl>
-                      <Input type="password" placeholder="••••••••" {...field} />
-                    </FormControl>
+                    <div className="relative">
+                      <FormControl>
+                        <Input
+                          type={showConfirmPassword ? "text" : "password"}
+                          placeholder="••••••••"
+                          {...field}
+                        />
+                      </FormControl>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground hover:bg-transparent"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                      >
+                        {showConfirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                      </Button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}

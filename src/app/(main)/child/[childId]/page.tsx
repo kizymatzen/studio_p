@@ -12,15 +12,15 @@ import { Button } from "@/components/ui/button";
 import { Loader2, AlertTriangle, UserCircle, Edit, Trash2, Smile, Star, Zap, ShieldCheck, Brain, Palette, Clock, ChevronLeft, FilePlus2, ListChecks, FileText, LineChart, CheckSquare } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { format } from "date-fns";
+import { format, isValid } from "date-fns";
 
 interface ChildProfile {
   id: string;
   name: string;
   nickname?: string;
   age: number;
-  ageInMonths?: number; // Added for milestone logic
-  birthdate: Timestamp; // Changed from string to Timestamp
+  ageInMonths?: number;
+  birthdate?: Timestamp; // Changed to optional Timestamp
   parentId: string;
   profile: {
     challenges?: string[];
@@ -46,7 +46,7 @@ interface BehaviorLog extends DocumentData {
 
 interface ProfileDetailProps {
   label: string;
-  value?: string | string[] | Date; // Allow Date for birthdate
+  value?: string | string[] | Date;
   icon?: React.ElementType;
   isList?: boolean;
   isDate?: boolean;
@@ -59,8 +59,8 @@ const ProfileDetailItem: React.FC<ProfileDetailProps> = ({ label, value, icon: I
 
   let displayValue: React.ReactNode;
   if (isDate && value instanceof Date) {
-    displayValue = format(value, "PPP"); // Example: Jun 1, 2020
-  } else if (isDate && value instanceof Timestamp) { // Handle Timestamp directly if needed
+    displayValue = format(value, "PPP");
+  } else if (isDate && value instanceof Timestamp) { 
     displayValue = format(value.toDate(), "PPP");
   } else if (isList && Array.isArray(value)) {
     displayValue = (
@@ -71,7 +71,7 @@ const ProfileDetailItem: React.FC<ProfileDetailProps> = ({ label, value, icon: I
       </div>
     );
   } else {
-    displayValue = typeof value === 'string' ? value : value?.toString(); // Fallback for other types
+    displayValue = typeof value === 'string' ? value : value?.toString();
   }
   
 
@@ -136,11 +136,46 @@ export default function ChildDetailPage() {
         const childDocSnap = await getDoc(childDocRef);
 
         if (childDocSnap.exists()) {
-          const childDataFromDb = childDocSnap.data();
-          const typedChildData = { 
-            id: childDocSnap.id, 
-            ...childDataFromDb 
-          } as ChildProfile;
+          const data = childDocSnap.data();
+          
+          let processedBirthdate: Timestamp | undefined = undefined;
+          if (data.birthdate) {
+            if (data.birthdate instanceof Timestamp) {
+              processedBirthdate = data.birthdate;
+            } else if (typeof data.birthdate === 'string') {
+              const parsedDate = new Date(data.birthdate);
+              if (isValid(parsedDate)) {
+                processedBirthdate = Timestamp.fromDate(parsedDate);
+              } else {
+                console.warn(`Child ${childDocSnap.id} has invalid birthdate string: ${data.birthdate}`);
+              }
+            } else if (typeof data.birthdate === 'object' && data.birthdate.seconds !== undefined && data.birthdate.nanoseconds !== undefined) {
+              // Handle plain object that might have been a Timestamp (e.g. after JSON stringify/parse)
+              try {
+                processedBirthdate = new Timestamp(data.birthdate.seconds, data.birthdate.nanoseconds);
+              } catch (e) {
+                 console.warn(`Child ${childDocSnap.id} has an object-like birthdate that could not be converted to Timestamp:`, data.birthdate, e);
+              }
+            } else {
+              console.warn(`Child ${childDocSnap.id} has an unrecognized birthdate format:`, data.birthdate);
+            }
+          }
+
+          const typedChildData: ChildProfile = {
+            id: childDocSnap.id,
+            name: data.name || "Unnamed Child",
+            nickname: data.nickname,
+            age: data.age,
+            ageInMonths: data.ageInMonths,
+            birthdate: processedBirthdate,
+            parentId: data.parentId,
+            profile: data.profile || {
+              challenges: [],
+              personality: [],
+              favoriteTheme: [],
+            },
+            createdAt: data.createdAt instanceof Timestamp ? data.createdAt : Timestamp.now(),
+          };
           
           if (typedChildData.parentId !== authUser.uid) {
             setError("You do not have permission to view this profile.");
@@ -377,5 +412,3 @@ export default function ChildDetailPage() {
     </div>
   );
 }
-
-    

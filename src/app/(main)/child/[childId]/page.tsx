@@ -9,7 +9,7 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, AlertTriangle, UserCircle, Edit, Trash2, CalendarDays, Smile, Star, Zap, ShieldCheck, Brain, Palette, Clock, ChevronLeft } from "lucide-react";
+import { Loader2, AlertTriangle, UserCircle, Edit, Trash2, CalendarDays, Smile, Star, Zap, ShieldCheck, Brain, Palette, Clock, ChevronLeft, FilePlus2 } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 
@@ -87,7 +87,8 @@ export default function ChildDetailPage() {
   React.useEffect(() => {
     if (!authUser || !childId) {
       if (!childId) setError("Child ID is missing.");
-      setIsLoading(false);
+      // Don't set loading to false here if authUser is null yet, wait for auth state
+      if (authUser && !childId) setIsLoading(false);
       return;
     }
 
@@ -122,7 +123,7 @@ export default function ChildDetailPage() {
     fetchChildData();
   }, [authUser, childId, router]);
 
-  if (isLoading) {
+  if (isLoading || !authUser) { // Keep loading if authUser is not yet available or still loading data
     return (
       <div className="flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center p-4">
         <Loader2 className="h-12 w-12 animate-spin text-primary" />
@@ -165,10 +166,19 @@ export default function ChildDetailPage() {
 
   return (
     <div className="space-y-6">
-      <Button variant="outline" size="sm" onClick={() => router.back()} className="mb-4">
-        <ChevronLeft className="mr-2 h-4 w-4" />
-        Back
-      </Button>
+      <div className="flex justify-between items-center mb-4">
+        <Button variant="outline" size="sm" onClick={() => router.back()}>
+          <ChevronLeft className="mr-2 h-4 w-4" />
+          Back
+        </Button>
+        <Button variant="default" size="sm" asChild>
+          <Link href={`/child/${child.id}/log-behavior`}>
+            <FilePlus2 className="mr-2 h-4 w-4" />
+            Log Behavior
+          </Link>
+        </Button>
+      </div>
+      
 
       <Card className="shadow-lg">
         <CardHeader className="flex flex-row justify-between items-start">
@@ -213,7 +223,7 @@ export default function ChildDetailPage() {
           </section>
         </CardContent>
          <CardFooter>
-          <p className="text-xs text-muted-foreground">Profile created on: {new Date(child.createdAt.seconds * 1000).toLocaleDateString()}</p>
+          <p className="text-xs text-muted-foreground">Profile created on: {child.createdAt ? new Date(child.createdAt.seconds * 1000).toLocaleDateString() : 'N/A'}</p>
         </CardFooter>
       </Card>
     </div>

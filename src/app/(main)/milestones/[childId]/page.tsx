@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
-import { doc, getDoc, collection, query, where, orderBy, onSnapshot, setDoc, Timestamp, DocumentData, getDocs } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, orderBy, onSnapshot, setDoc, Timestamp, DocumentData, getDocs, writeBatch } from "firebase/firestore";
 import { differenceInMonths, format, isValid } from "date-fns";
 
 import { auth, db } from "@/lib/firebase";
@@ -12,11 +12,13 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, AlertTriangle, CheckSquare, ChevronLeft, UserCircle2, CheckCircle2, XCircle, CircleDashed, RefreshCcwIcon } from "lucide-react";
+import { Loader2, AlertTriangle, CheckSquare, ChevronLeft, UserCircle2, CheckCircle2, XCircle, CircleDashed, RefreshCcwIcon, TrendingUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+
 
 interface ChildData {
   id: string;
@@ -100,6 +102,7 @@ export default function MilestonesPage() {
   const [milestoneStats, setMilestoneStats] = React.useState({ achieved: 0, inProgress: 0, notStarted: 0, total: 0 });
 
   const [isLoading, setIsLoading] = React.useState(true);
+  const [isUpdatingGroup, setIsUpdatingGroup] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -151,6 +154,12 @@ export default function MilestonesPage() {
           }
         }
         
+        if (!processedBirthdate) {
+           setError("Child birthdate is missing or invalid, cannot calculate age for milestones.");
+           setIsLoading(false);
+           return;
+        }
+
         const fetchedChildData = { 
             id: childDocSnap.id, 
             name: rawData?.name || "Unnamed Child",
@@ -160,28 +169,21 @@ export default function MilestonesPage() {
         
         setChildData(fetchedChildData);
         
-        if (!fetchedChildData.birthdate || typeof fetchedChildData.birthdate.toDate !== 'function') {
-          setError("Child birthdate is missing or invalid, cannot calculate age for milestones.");
-          setIsLoading(false);
-          return;
-        }
         const currentAgeInMonths = getAgeInMonths(fetchedChildData.birthdate);
         setAgeInMonths(currentAgeInMonths);
 
         const templatesColRef = collection(db, "milestoneTemplates");
-        // Query for templates relevant up to the child's current age
-        // Removed maxAgeMonths filter to show upcoming milestones as well or ones that might have been relevant slightly earlier.
         const templatesQuery = query(
           templatesColRef,
-          where("minAgeMonths", "<=", currentAgeInMonths),
-          orderBy("minAgeMonths", "asc"), // Order by age for grouping
-          orderBy("description", "asc") // Secondary sort for consistent order within groups
+          where("minAgeMonths", "<=", currentAgeInMonths), // Show milestones up to current age
+          orderBy("minAgeMonths", "asc"),
+          orderBy("description", "asc")
         );
         const templatesSnapshot = await getDocs(templatesQuery);
         const templates: MilestoneTemplate[] = templatesSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as MilestoneTemplate));
 
         if (templates.length === 0) {
-            console.log("No milestone templates found for age:", currentAgeInMonths);
+            console.log("No milestone templates found relevant up to age:", currentAgeInMonths);
         }
 
         const progressColRef = collection(db, "children", childId, "milestoneProgress");
@@ -193,15 +195,14 @@ export default function MilestonesPage() {
             return {
               ...template,
               currentStatus: progress?.status || "Not Started",
-              progressDocId: progress?.id,
+              progressDocId: progress?.id, // This is template.id, so use it directly for doc ID
               dateAchieved: progress?.dateAchieved,
             };
           });
           
-          // Grouping logic
           const groupsMap: Record<string, { milestones: CombinedMilestone[], groupStats: GroupedMilestone['groupStats'] }> = {};
           combined.forEach(cm => {
-            const ageGroupKey = cm.ageRange || `Age ${cm.minAgeMonths}-${cm.maxAgeMonths} months`; // Fallback key
+            const ageGroupKey = cm.ageRange || `Age ${cm.minAgeMonths}-${cm.maxAgeMonths} months`;
             if (!groupsMap[ageGroupKey]) {
               groupsMap[ageGroupKey] = { milestones: [], groupStats: { achieved: 0, inProgress: 0, notStarted: 0, total: 0 } };
             }
@@ -214,12 +215,15 @@ export default function MilestonesPage() {
 
           const groupedResult: GroupedMilestone[] = Object.entries(groupsMap).map(([ageRange, data]) => ({
             ageRange,
-            milestones: data.milestones.sort((a,b) => a.description.localeCompare(b.description)), // ensure consistent order
+            milestones: data.milestones.sort((a,b) => a.description.localeCompare(b.description)),
             groupStats: data.groupStats
-          })).sort((a,b) => { // Sort groups by minAgeMonths extracted from ageRange or the first milestone
-             const getMinAge = (rangeStr: string) => parseInt(rangeStr.split('-')[0], 10) || 0; // Basic parser for "X-Y months"
-             const minAgeA = a.milestones[0]?.minAgeMonths ?? getMinAge(a.ageRange);
-             const minAgeB = b.milestones[0]?.minAgeMonths ?? getMinAge(b.ageRange);
+          })).sort((a,b) => {
+             const getMinAgeFromRange = (rangeStr: string) => {
+                const match = rangeStr.match(/^(\d+)-?(\d+)?\s*months?$/i) || rangeStr.match(/^Age\s*(\d+)-?(\d+)?\s*months?$/i) || rangeStr.match(/^Baby\s*at\s*(\d+)\s*months?$/i);
+                return match && match[1] ? parseInt(match[1], 10) : 9999; // Default for sorting if unparseable
+             };
+             const minAgeA = a.milestones[0]?.minAgeMonths ?? getMinAgeFromRange(a.ageRange);
+             const minAgeB = b.milestones[0]?.minAgeMonths ?? getMinAgeFromRange(b.ageRange);
              return minAgeA - minAgeB;
           });
           
@@ -236,7 +240,7 @@ export default function MilestonesPage() {
         }, (err) => {
           console.error("Error fetching milestone progress:", err);
           if (err.code === 'failed-precondition') {
-             setError("Failed to load milestone progress. A Firestore index might be required. Please check the browser console for a link to create it for the 'milestoneProgress' subcollection.");
+             setError("Failed to load milestone progress. A Firestore index might be required. Please check the browser console for a link to create it for the 'milestoneProgress' subcollection. The index usually needs to cover fields used in 'where' clauses or 'orderBy'.");
           } else {
             setError("Failed to load milestone progress. " + err.message);
           }
@@ -247,7 +251,7 @@ export default function MilestonesPage() {
       } catch (e: any) {
         console.error("Error fetching data:", e);
          if (e.code === 'failed-precondition' && e.message.toLowerCase().includes("index")) {
-            setError("Failed to load milestone templates. A Firestore index might be required. Please check the browser console for a link to create it (likely on 'milestoneTemplates' for 'minAgeMonths' and 'description', or similar based on the exact error message).");
+            setError("Failed to load milestone templates. A Firestore index might be required. Please check the browser console for a link to create it (likely on 'milestoneTemplates' for 'minAgeMonths' and 'description' (or 'maxAgeMonths' if you re-enable that filter), or similar based on the exact error message).");
         } else {
             setError("Failed to load page data. " + e.message);
         }
@@ -255,23 +259,25 @@ export default function MilestonesPage() {
       }
     };
     
-    let unsubscribe: (() => void) | undefined;
-    fetchChildAndMilestones().then(unsub => unsubscribe = unsub);
+    let unsubscribePromise = fetchChildAndMilestones();
     
     return () => {
-      if (unsubscribe) unsubscribe();
+      unsubscribePromise.then(unsubscribe => {
+        if (unsubscribe) unsubscribe();
+      });
     };
 
   }, [authUser, childId, toast]);
 
-  const handleStatusChange = async (milestoneId: string, newStatus: MilestoneStatus) => {
+  const handleStatusChange = async (milestoneTemplateId: string, newStatus: MilestoneStatus) => {
     if (!authUser || !childId) return;
 
-    const progressDocRef = doc(db, "children", childId, "milestoneProgress", milestoneId);
+    // The document ID in milestoneProgress is the milestoneTemplateId
+    const progressDocRef = doc(db, "children", childId, "milestoneProgress", milestoneTemplateId);
 
     try {
       const progressDataUpdate: Partial<Omit<MilestoneProgress, 'id'>> = { 
-        milestoneId: milestoneId, // Ensure milestoneId is part of the data being set
+        milestoneId: milestoneTemplateId, 
         status: newStatus,
       };
       if (newStatus === "Achieved") {
@@ -285,6 +291,43 @@ export default function MilestonesPage() {
     } catch (error: any) {
       console.error("Error updating milestone status:", error);
       toast({ variant: "destructive", title: "Update Failed", description: error.message });
+    }
+  };
+
+  const handleMarkGroupAchieved = async (group: GroupedMilestone) => {
+    if (!authUser || !childId || !group || group.milestones.length === 0) return;
+
+    setIsUpdatingGroup(group.ageRange);
+    const batch = writeBatch(db);
+    const now = Timestamp.now();
+    let updatesMade = 0;
+
+    group.milestones.forEach(milestone => {
+      if (milestone.currentStatus !== "Achieved") {
+        const progressDocRef = doc(db, "children", childId, "milestoneProgress", milestone.id);
+        batch.set(progressDocRef, {
+          milestoneId: milestone.id,
+          status: "Achieved",
+          dateAchieved: now,
+        }, { merge: true });
+        updatesMade++;
+      }
+    });
+
+    if (updatesMade === 0) {
+      toast({ title: "No Changes", description: `All milestones in "${group.ageRange}" were already achieved.` });
+      setIsUpdatingGroup(null);
+      return;
+    }
+
+    try {
+      await batch.commit();
+      toast({ title: "Group Updated", description: `All unachieved milestones in "${group.ageRange}" marked as Achieved.` });
+    } catch (error: any) {
+      console.error("Error updating group milestones:", error);
+      toast({ variant: "destructive", title: "Group Update Failed", description: error.message });
+    } finally {
+      setIsUpdatingGroup(null);
     }
   };
 
@@ -327,8 +370,11 @@ export default function MilestonesPage() {
   }
 
   const { achieved, inProgress, notStarted, total } = milestoneStats;
+  const defaultAccordionOpen = groupedMilestones.length > 0 ? [groupedMilestones[0].ageRange] : [];
+
 
   return (
+    <TooltipProvider>
     <div className="space-y-6">
        <Button variant="outline" size="sm" onClick={() => router.back()} className="mb-4">
         <ChevronLeft className="mr-2 h-4 w-4" />
@@ -373,6 +419,12 @@ export default function MilestonesPage() {
               </div>
               <Progress value={total > 0 ? (notStarted / total) * 100 : 0} className="h-3 [&>div]:bg-gray-400" aria-label={`${notStarted} of ${total} milestones not started`} />
             </div>
+             {/* Placeholder for "View Milestone Journey by Age" button */}
+            <div className="pt-4 text-right">
+                <Button variant="outline" size="sm" disabled>
+                    <TrendingUp className="mr-2 h-4 w-4" /> View Milestone Journey (Coming Soon)
+                </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -389,20 +441,46 @@ export default function MilestonesPage() {
         )}
 
         {!isLoading && !error && groupedMilestones.length > 0 && (
-          <Accordion type="multiple" className="w-full space-y-3" defaultValue={[]}>
+          <Accordion type="multiple" className="w-full space-y-3" defaultValue={defaultAccordionOpen}>
             {groupedMilestones.map((group) => {
-              const Icon = statusIcons[group.groupStats.achieved === group.groupStats.total && group.groupStats.total > 0 ? "Achieved" : group.groupStats.inProgress > 0 ? "In Progress" : "Not Started"];
-              const iconColor = statusColors[group.groupStats.achieved === group.groupStats.total && group.groupStats.total > 0 ? "Achieved" : group.groupStats.inProgress > 0 ? "In Progress" : "Not Started"];
+              const allInGroupAchieved = group.groupStats.achieved === group.groupStats.total && group.groupStats.total > 0;
+              const groupStatusKey: MilestoneStatus = allInGroupAchieved ? "Achieved" : group.groupStats.inProgress > 0 || group.groupStats.achieved > 0 ? "In Progress" : "Not Started";
+              const Icon = statusIcons[groupStatusKey];
+              const iconColor = statusColors[groupStatusKey];
+              const isCurrentlyUpdatingThisGroup = isUpdatingGroup === group.ageRange;
               
               return (
                 <AccordionItem value={group.ageRange} key={group.ageRange} className="border rounded-lg shadow-sm bg-card overflow-hidden">
                   <AccordionTrigger className="px-4 py-3 hover:no-underline text-left">
                     <div className="flex justify-between w-full items-center">
-                      <span className="font-semibold text-lg text-primary flex items-center">
-                         <Icon className={`h-5 w-5 mr-2 ${iconColor}`} /> 
-                        {group.ageRange}
-                      </span>
-                      <Badge variant={group.groupStats.achieved === group.groupStats.total && group.groupStats.total > 0 ? "default" : "secondary"}>
+                      <div className="flex items-center gap-2">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation(); // Prevent accordion toggle
+                                if (!allInGroupAchieved && !isCurrentlyUpdatingThisGroup) {
+                                  handleMarkGroupAchieved(group);
+                                }
+                              }}
+                              disabled={allInGroupAchieved || isCurrentlyUpdatingThisGroup}
+                              className={`p-0.5 rounded-full ${allInGroupAchieved ? 'cursor-default' : 'hover:bg-accent'}`}
+                              aria-label={allInGroupAchieved ? "All achieved in this group" : "Mark all in this group as achieved"}
+                            >
+                              {isCurrentlyUpdatingThisGroup ? <Loader2 className={`h-5 w-5 animate-spin ${iconColor}`} /> : <Icon className={`h-5 w-5 ${iconColor}`} />}
+                            </button>
+                          </TooltipTrigger>
+                          {!allInGroupAchieved && (
+                            <TooltipContent>
+                              <p>Mark all in "{group.ageRange}" as Achieved</p>
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                        <span className="font-semibold text-lg text-primary">
+                          {group.ageRange}
+                        </span>
+                      </div>
+                      <Badge variant={allInGroupAchieved ? "default" : "secondary"}>
                         {group.groupStats.achieved} / {group.groupStats.total} Achieved
                       </Badge>
                     </div>
@@ -428,6 +506,7 @@ export default function MilestonesPage() {
                               <Select
                                 value={milestone.currentStatus}
                                 onValueChange={(newStatus: MilestoneStatus) => handleStatusChange(milestone.id, newStatus as MilestoneStatus)}
+                                disabled={isCurrentlyUpdatingThisGroup}
                               >
                                 <SelectTrigger className="h-9">
                                   <SelectValue placeholder="Set status" />
@@ -453,9 +532,6 @@ export default function MilestonesPage() {
         )}
       </div>
     </div>
+    </TooltipProvider>
   );
 }
-
-    
-
-    

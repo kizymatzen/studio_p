@@ -160,14 +160,13 @@ export default function ChildProgressPage() {
       (err: any) => {
         console.error("Error fetching behaviors:", err);
         if (err.code === 'failed-precondition') {
-           setBehaviorsError(
-            "The behavior chart requires a Firestore index. Please check your browser's developer console (usually F12) for a link to create it. After creating, it may take a few minutes for the index to build. The link might also be logged above this message in the console."
-          );
+           const detailedIndexErrorMessage = "The behavior chart requires a Firestore index. Please check your browser's developer console (usually F12) for a link to create it. After creating, it may take a few minutes for the index to build. If the Firebase console says the index 'already exists', please ensure it is for the 'behaviors' collection and has these exact fields in order: 1. childId (Ascending), 2. parentId (Ascending), 3. timestamp (Ascending). An incorrect existing index can cause this issue.";
+          setBehaviorsError(detailedIndexErrorMessage);
           toast({
             variant: "destructive",
-            title: "Missing Index Required by Firestore",
-            description: "A special index is needed for behavior trends. Check your browser's developer console for a Firebase link to create it. This process can take a few minutes to build after creation.",
-            duration: 20000, 
+            title: "Missing Or Incorrect Firestore Index",
+            description: detailedIndexErrorMessage,
+            duration: 30000, 
           });
         } else {
           setBehaviorsError("Failed to load behavior data. " + err.message);
@@ -183,23 +182,32 @@ export default function ChildProgressPage() {
       const processedData: { [date: string]: { date: string } & { [type: string]: number } } = {};
 
       behaviors.forEach(log => {
-        const dateStr = formatDateFns(log.timestamp.toDate(), "yyyy-MM-dd");
-        if (!processedData[dateStr]) {
-          processedData[dateStr] = { date: formatDateFns(log.timestamp.toDate(), "MMM d") }; // For X-axis label
-          behaviorTypesForChart.forEach(type => {
-            processedData[dateStr][type] = 0;
-          });
-        }
-        if (behaviorTypesForChart.includes(log.type as any)) {
-          processedData[dateStr][log.type] = (processedData[dateStr][log.type] || 0) + 1;
+        if (log.timestamp && typeof log.timestamp.toDate === 'function') { // Check if timestamp is valid
+          const dateStr = formatDateFns(log.timestamp.toDate(), "yyyy-MM-dd");
+          if (!processedData[dateStr]) {
+            processedData[dateStr] = { date: formatDateFns(log.timestamp.toDate(), "MMM d") }; // For X-axis label
+            behaviorTypesForChart.forEach(type => {
+              processedData[dateStr][type] = 0;
+            });
+          }
+          if (behaviorTypesForChart.includes(log.type as any)) {
+            processedData[dateStr][log.type] = (processedData[dateStr][log.type] || 0) + 1;
+          } else {
+             processedData[dateStr]["Other"] = (processedData[dateStr]["Other"] || 0) + 1;
+          }
         } else {
-           processedData[dateStr]["Other"] = (processedData[dateStr]["Other"] || 0) + 1;
+          console.warn("Skipping behavior log due to invalid timestamp:", log);
         }
       });
       
-      const dataArray = Object.values(processedData).sort((a, b) => 
-        parseISO(Object.keys(processedData).find(key => processedData[key] === a) || "").getTime() -
-        parseISO(Object.keys(processedData).find(key => processedData[key] === b) || "").getTime()
+      const dataArray = Object.values(processedData).sort((a, b) => {
+          const dateA = Object.keys(processedData).find(key => processedData[key] === a);
+          const dateB = Object.keys(processedData).find(key => processedData[key] === b);
+          if (dateA && dateB) {
+            return parseISO(dateA).getTime() - parseISO(dateB).getTime();
+          }
+          return 0;
+        }
       );
       setChartData(dataArray);
     } else {

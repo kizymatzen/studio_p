@@ -7,7 +7,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyAzDdhkTEj7tQyeTQabzSbyR2b9GttaUMM",
   authDomain: "little-steps-778de.firebaseapp.com",
   projectId: "little-steps-778de",
-  storageBucket: "little-steps-778de.firebasestorage.app",
+  storageBucket: "little-steps-778de.appspot.com",
   messagingSenderId: "914168836535",
   appId: "1:914168836535:web:d0fd67316ea14ed338b832",
   measurementId: "G-B56JF9LP2B"
